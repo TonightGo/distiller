@@ -59,7 +59,7 @@ def assign_layer_names(container, name=None):
     is_leaf = True
     for key, module in container._modules.items():
         is_leaf = False
-        assign_names(module, ".".join([name, key]) if name is not None else key)
+        assign_layer_names(module, ".".join([name, key]) if name is not None else key)
     if is_leaf:
         container.distiller_name = name
 
@@ -108,7 +108,6 @@ def density(tensor):
     Returns:
         density (float)
     """
-    assert torch.numel(tensor) > 0
     nonzero = torch.nonzero(tensor)
     if nonzero.dim() == 0:
         return 0.0
@@ -306,12 +305,12 @@ def log_training_progress(stats_dict, params_dict, epoch, steps_completed, total
         logger.log_weights_distribution(params_dict, steps_completed)
 
 
-def log_activation_sparsity(epoch, phase, loggers, collector):
+def log_activation_statsitics(epoch, phase, loggers, collector):
     """Log information about the sparsity of the activations"""
     if collector is None:
         return
     for logger in loggers:
-        logger.log_activation_sparsity(phase, collector.value(), epoch)
+        logger.log_activation_statsitic(phase, collector.stat_name, collector.value(), epoch)
 
 
 def log_weights_sparsity(model, epoch, loggers):
