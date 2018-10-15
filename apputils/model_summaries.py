@@ -628,8 +628,8 @@ def export_img_classifier_to_onnx(model, onnx_fname, dataset):
         msglogger.info('Exported the model to ONNX format at %s' % os.path.realpath(onnx_fname))
 
 
-
 def data_node_has_parent(g, id):
     for edge in g.edges:
-        if edge.dst == id: return True
+        if edge.dst == id:
+            return True
     return False
