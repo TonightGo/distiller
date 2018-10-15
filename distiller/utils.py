@@ -50,7 +50,7 @@ def pretty_int(i):
     return "{:,}".format(i)
 
 
-def assign_layer_names(container, name=None):
+def assign_layer_fq_names(container, name=None):
     """Assign human-readable names to the modules (layers).
 
     Sometimes we need to access modules by their names, and we'd like to use
@@ -59,9 +59,27 @@ def assign_layer_names(container, name=None):
     is_leaf = True
     for key, module in container._modules.items():
         is_leaf = False
-        assign_layer_names(module, ".".join([name, key]) if name is not None else key)
+        assign_layer_fq_names(module, ".".join([name, key]) if name is not None else key)
     if is_leaf:
         container.distiller_name = name
+
+
+def find_module_by_fq_name(model, fq_mod_name):
+    """Given a module's fully-qualified name, find the module in the provided model.
+
+    A fully-qualified name is assigned to modules in function assign_layer_fq_names.
+
+    Arguments:
+        model: the model to search
+        fq_mod_name: the module whose name we want to look up
+
+    Returns:
+        The module or None, if the module was not found.
+    """
+    for module in model.modules():
+        if hasattr(module, 'distiller_name') and fq_mod_name == module.distiller_name:
+            return module
+    return None
 
 
 def normalize_module_name(layer_name):
@@ -206,34 +224,48 @@ def density_ch(tensor):
     return 1 - sparsity_ch(tensor)
 
 
-def sparsity_cols(tensor):
-    """Column-wise sparsity for 2D tensors"""
+def sparsity_matrix(tensor, dim):
+    """Generic sparsity computation for 2D matrices"""
     if tensor.dim() != 2:
         return 0
 
-    num_cols = tensor.size()[1]
-    nonzero_cols = len(torch.nonzero(tensor.abs().sum(dim=0)))
-    return 1 - nonzero_cols/num_cols
+    num_structs = tensor.size()[dim]
+    nonzero_structs = len(torch.nonzero(tensor.abs().sum(dim=1-dim)))
+    return 1 - nonzero_structs/num_structs
 
 
-def density_cols(tensor):
+def sparsity_cols(tensor, trasposed=True):
+    """Column-wise sparsity for 2D tensors
+
+    PyTorch GEMM matrices are transposed before they are used in the GEMM operation.
+    In other words the matrices are stored in memory transposed.  So by default we compute
+    the sparsity of the transposed dimension.
+    """
+    if trasposed:
+        return sparsity_matrix(tensor, 0)
+    return sparsity_matrix(tensor, 1)
+
+
+def density_cols(tensor, transposed=True):
     """Column-wise density for 2D tensors"""
-    return 1 - sparsity_cols(tensor)
+    return 1 - sparsity_cols(tensor, transposed)
 
 
-def sparsity_rows(tensor):
-    """Row-wise sparsity for 2D matrices"""
-    if tensor.dim() != 2:
-        return 0
+def sparsity_rows(tensor, trasposed=True):
+    """Row-wise sparsity for 2D matrices
 
-    num_rows = tensor.size()[0]
-    nonzero_rows = len(torch.nonzero(tensor.abs().sum(dim=1)))
-    return 1 - nonzero_rows/num_rows
+    PyTorch GEMM matrices are transposed before they are used in the GEMM operation.
+    In other words the matrices are stored in memory transposed.  So by default we compute
+    the sparsity of the transposed dimension.
+    """
+    if trasposed:
+        return sparsity_matrix(tensor, 1)
+    return sparsity_matrix(tensor, 0)
 
 
-def density_rows(tensor):
+def density_rows(tensor, transposed=True):
     """Row-wise density for 2D tensors"""
-    return 1 - sparsity_rows(tensor)
+    return 1 - sparsity_rows(tensor, transposed)
 
 
 def norm_filters(weights, p=1):
@@ -293,7 +325,27 @@ def activation_channels_means(activation):
     c x h x w tensor, into a 1 x c vector."
 
     Returns - for each channel: the batch-mean of its L1 magnitudes (i.e. over all of the
-    activations in the mini-batch, compute the mean of the L! magnitude of each channel).
+    activations in the mini-batch, compute the mean of the L1 magnitude of each channel).
+    """
+    view_2d = activation.view(-1, activation.size(2) * activation.size(3))  # (batch*channel) x (h*w)
+    featuremap_means = sparsity_rows(view_2d)
+    featuremap_means_mat = featuremap_means.view(activation.size(0), activation.size(1))  # batch x channel
+    # We need to move the results back to the CPU
+    return featuremap_means_mat.mean(dim=0).cpu()
+
+
+def activation_channels_apoz(activation):
+    """Calculate the APoZ of each of an activation's channels.
+
+    APoZ is the Average Percentage of Zeros (or simply: average sparsity) and is defined in:
+    "Network Trimming: A Data-Driven Neuron Pruning Approach towards Efficient Deep Architectures".
+
+    The activation usually has the shape: (batch_size, num_channels, h, w).
+
+    "We first use global average pooling to convert the output of layer i, which is a
+    c x h x w tensor, into a 1 x c vector."
+
+    Returns - for each channel: the batch-mean of its sparsity.
     """
     view_2d = activation.view(-1, activation.size(2) * activation.size(3))  # (batch*channel) x (h*w)
     featuremap_means = view_2d.mean(dim=1)  # global average pooling
